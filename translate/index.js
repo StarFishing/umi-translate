@@ -30,7 +30,7 @@ deleteOldDir()
     init()
   })
   .catch((e) => {
-    throw e
+    console.error(e)
   })
 
 /**
@@ -54,7 +54,7 @@ function init() {
       console.log("translate is runing,dont close window......")
       sourceMap.forEach((item) => {
         Object.keys(pathMap).forEach((key) => {
-          translateSource(item.path, item.code, key)
+          translateSource(item.path, replaceKeyByZero(item.code), key)
         })
       })
     })
@@ -117,9 +117,13 @@ function rewriteFolder(dir, lang, result, ast) {
  * 处理翻译
  */
 function translateSource(dir, source, lang) {
-  translate({ source, target: lang, log: true }).then((result) => {
-    rewriteFolder(dir, lang, result)
-  })
+  translate({ source, target: lang, log: true })
+    .then((result) => {
+      rewriteFolder(dir, lang, replaceZeroByKey(result))
+    })
+    .catch((e) => {
+      throw e
+    })
 }
 /**
  * 删除存在的其他语言文件夹
@@ -165,3 +169,29 @@ const filterEntryIndex = through2.obj(function (item, enc, callback) {
   // this.push(chunk);
   callback()
 })
+
+/**
+ * 去除文本中的{key},避免翻译格式错误
+ * @param {*} source
+ */
+
+function replaceKeyByZero(source) {
+  const nokeySource = {}
+  Object.keys(source).forEach((key) => {
+    nokeySource[key] = source[key].replace(/{key}/g, "{0}")
+  })
+  return nokeySource
+}
+
+/**
+ * 还原文本中的{key}
+ * @param {*} source
+ */
+
+function replaceZeroByKey(source) {
+  const noZeroSource = {}
+  Object.keys(source).forEach((key) => {
+    noZeroSource[key] = source[key].replace(/{[0]*}/g, "{key}")
+  })
+  return noZeroSource
+}
