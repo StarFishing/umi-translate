@@ -26,11 +26,13 @@ const baseDir = "zh-CN"
 const rootDir = path.resolve(__dirname, "../locales")
 const openLog = false // 是否开启翻译结果打印
 const API = "youdao" //翻译api 可选值为 youdao || google
+const async = false // 是否异步翻译 默认为true (同步翻译有较高的容错，但是时间较长)
 
 // 以下配置不允许更改
 let sourceMap = []
 let translateErrorMap = []
 let counter = 0 //全局计数器，在并发翻译时使用,不允许更改
+let timeLabel = `采用${async ? "异步" : "同步"}翻译方式，翻译总用时`
 // 每次移除旧文件，重新创建新的文件
 deleteOldDir()
   .then(() => {
@@ -60,19 +62,19 @@ function init() {
     .on("end", () => {
       handleParseObject()
       console.log("Translate is runing,don't close window......")
-      // handleStartTranslate();
-      sourceMap.forEach((item) => {
-        Object.keys(pathMap).forEach((key) => {
-          translateSource(item.path, replaceKeyByZero(item.code), key)
-        })
-      })
+      console.time(timeLabel)
+      if (async) {
+        handleStartTranslate()
+      } else {
+        handleStartTranslateSync()
+      }
     })
 }
 
 /**
  * 串行进行翻译，牺牲速度提高精度
  */
-async function handleStartTranslate() {
+async function handleStartTranslateSync() {
   for (let i = 0; i < sourceMap.length; i++) {
     let item = sourceMap[i]
     await Object.keys(pathMap).reduce((acc, cur) => {
@@ -81,7 +83,17 @@ async function handleStartTranslate() {
       })
     }, Promise.resolve())
   }
-  logErrorInfo()
+}
+
+/**
+ * 异步翻译
+ */
+function handleStartTranslate() {
+  sourceMap.forEach((item) => {
+    Object.keys(pathMap).forEach((key) => {
+      translateSource(item.path, replaceKeyByZero(item.code), key)
+    })
+  })
 }
 
 /**
@@ -213,6 +225,7 @@ function replaceKeyByZero(source) {
   })
   return nokeySource
 }
+
 /**
  * 还原文本中的{key}
  * @param {object} source 翻译的结果对象
@@ -260,9 +273,16 @@ function handleErrorTextCollect(path, lang) {
   this.lang = lang
   this.error = []
 }
+/**
+ * 添加一条错误信息到错误实例
+ * @param {object} obj
+ */
 handleErrorTextCollect.prototype.append = function (obj) {
   this.error.push(obj)
 }
+/**
+ * 获取当前手机结果
+ */
 handleErrorTextCollect.prototype.getCollect = function () {
   return {
     path: this.path.replace(baseDir, pathMap[this.lang]),
@@ -271,6 +291,10 @@ handleErrorTextCollect.prototype.getCollect = function () {
   }
 }
 
+/**
+ * 添加一个错误实例到错误日志
+ * @param {object} errorMsg
+ */
 function appendTranslateErrorMap(errorMsg) {
   if (errorMsg.error.length) translateErrorMap.push(errorMsg)
   if (counter === sourceMap.length * Object.keys(pathMap).length) {
@@ -282,6 +306,7 @@ function appendTranslateErrorMap(errorMsg) {
  * 错误日志打印
  */
 function logErrorInfo() {
+  console.timeEnd(timeLabel)
   if (translateErrorMap.length) {
     console.log(
       `翻译结束,存在部分文本翻译失败，错误收集如下，详情可查看当前目录下的 tranlate-error.json 文件`
