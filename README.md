@@ -18,7 +18,7 @@
 
 以 ant-design-pro 演示项目的国际化文本目录为例，文件夹结构如下图
 
-<img src="https://i.loli.net/2020/06/20/5f4qQn9KdbtF3eT.png" alt="fanyi.png" style="zoom:50%;" />
+<img src="https://i.loli.net/2020/06/21/NdSRK2zQmZFWu9c.png" alt="fanyi.png" style="zoom:50%;" />
 
 中文目录 zh-CN 下包含所有带翻译的文件，其中 zh-CN 目录下可以嵌套多个目录，如上图标注展示。翻译的入口为 zh-CN 文件夹，入口路径需要正确配置，否则无法正确的将翻译结果自动生成到其他语言的目录下，入口配置如下
 
