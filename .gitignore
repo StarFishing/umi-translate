@@ -1,5 +1,4 @@
-locales
-/ast.js
-/index.js
-/parse.js
+/.DS_Store
+/locales
+/package-lock.json
 node_modules
