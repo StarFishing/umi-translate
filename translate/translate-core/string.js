@@ -11,14 +11,18 @@ function unescape(value) {
     .replace(/&apos;/g, "'")
     .replace(/&#39;/g, "'")
     .replace(/&nbsp;/g, " ")
-    .replace(/&#160;/g, " ")
+    .replace(/&#160;/g, " ");
 }
 
+/**
+ * 首字母大写
+ * @param {*} value
+ */
 function capitalize(value) {
-  return value.charAt(0).toUpperCase() + value.slice(1)
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 module.exports = {
   unescape,
   capitalize,
-}
+};

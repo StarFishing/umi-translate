@@ -4,7 +4,12 @@ const fs = require("fs")
 const recast = require("recast")
 const { parse, print } = recast
 const jsonic = require("jsonic")
-const { filterJs, dirExists, getStat } = require("./translate-helper")
+const {
+  filterJs,
+  dirExists,
+  getStat,
+  removeComments,
+} = require("./translate-helper")
 const { translate } = require("./translate-core/index")
 const rimraf = require("rimraf")
 const through2 = require("through2")
@@ -16,14 +21,17 @@ const pathMap = {
   vi: "vi-Vi",
 }
 
-const baseDir = "zh"
-
+const baseDir = "zh-CN"
 // 需要翻译的文件夹路径
-const rootDir = path.resolve(__dirname, "../locals")
+const rootDir = path.resolve(__dirname, "../locales")
+const openLog = false // 是否开启翻译结果打印
+const API = "youdao" //翻译api 可选值为 youdao || google
 
+// 以下配置不允许更改
 let sourceMap = []
-
-// 每次一处旧文件，重新创建新的文件
+let translateErrorMap = []
+let counter = 0 //全局计数器，在并发翻译时使用,不允许更改
+// 每次移除旧文件，重新创建新的文件
 deleteOldDir()
   .then(() => {
     // 文件删除完成，开始翻译重建
@@ -38,7 +46,7 @@ deleteOldDir()
  * 读取是个异步过程
  */
 function init() {
-  klaw(path.join(rootDir))
+  klaw(path.join(rootDir, baseDir))
     .pipe(filterJs)
     .pipe(filterEntryIndex)
     .on("data", function (item) {
@@ -51,7 +59,8 @@ function init() {
     })
     .on("end", () => {
       handleParseObject()
-      console.log("translate is runing,dont close window......")
+      console.log("Translate is runing,don't close window......")
+      // handleStartTranslate();
       sourceMap.forEach((item) => {
         Object.keys(pathMap).forEach((key) => {
           translateSource(item.path, replaceKeyByZero(item.code), key)
@@ -61,11 +70,27 @@ function init() {
 }
 
 /**
+ * 串行进行翻译，牺牲速度提高精度
+ */
+async function handleStartTranslate() {
+  for (let i = 0; i < sourceMap.length; i++) {
+    let item = sourceMap[i]
+    await Object.keys(pathMap).reduce((acc, cur) => {
+      return acc.then(() => {
+        return translateSource(item.path, replaceKeyByZero(item.code), cur)
+      })
+    }, Promise.resolve())
+  }
+  logErrorInfo()
+}
+
+/**
  * 将字符串astcode转换为对象
  */
 function astCodeToObject(content) {
   return jsonic(content)
 }
+
 /**
  * 将ast获取的对象表达式字符串转换为js对象
  */
@@ -74,11 +99,12 @@ function getSourceObject(ast) {
   recast.visit(ast, {
     visitObjectExpression(path) {
       const astCode = print(path.node).code
-      codeObj = astCodeToObject(astCode)
+      // 移除注释后转换，否则无法解析注释
+      codeObj = astCodeToObject(removeComments(astCode))
       return false
     },
   })
-  return codeObj
+  return codeObj || {}
 }
 
 /**
@@ -91,6 +117,7 @@ function handleParseObject() {
   })
   return sourceMap
 }
+
 /**
  * 将翻译后的文件写回对应的文件夹下
  * @param {*} dir 目录名称
@@ -117,14 +144,19 @@ function rewriteFolder(dir, lang, result, ast) {
  * 处理翻译
  */
 function translateSource(dir, source, lang) {
-  translate({ source, target: lang, log: true })
-    .then((result) => {
-      rewriteFolder(dir, lang, replaceZeroByKey(result))
-    })
-    .catch((e) => {
-      throw e
-    })
+  return new Promise((resolve, reject) => {
+    translate({ map: source, target: lang, log: openLog, api: API })
+      .then((result) => {
+        rewriteFolder(dir, lang, replaceZeroByKey(result, dir, lang))
+        resolve()
+      })
+      .catch((e) => {
+        console.log("Please check props type")
+        reject(e)
+      })
+  })
 }
+
 /**
  * 删除存在的其他语言文件夹
  */
@@ -139,6 +171,7 @@ function deleteOldDir() {
             rimraf(dir, (err) => {
               if (err) {
                 console.log(err)
+                console.error("文件夹移除失败")
                 reject()
               }
               // 文件删除完成
@@ -149,7 +182,6 @@ function deleteOldDir() {
           }
         })
       })
-      // })
     })
   }, Promise.resolve())
 }
@@ -159,14 +191,13 @@ function deleteOldDir() {
  */
 const filterEntryIndex = through2.obj(function (item, enc, callback) {
   if (path.basename(item.path, ".js") === "index") {
-    Object.keys(pathMap).forEach((key) => {
-      const ast = fs.readFileSync(item.path, "utf8")
-      rewriteFolder(item.path, key, false, ast)
+    Object.keys(pathMap).forEach((lang) => {
+      const sourceFile = fs.readFileSync(item.path, "utf8")
+      rewriteFolder(item.path, lang, false, sourceFile)
     })
   } else {
     this.push(item)
   }
-  // this.push(chunk);
   callback()
 })
 
@@ -174,24 +205,101 @@ const filterEntryIndex = through2.obj(function (item, enc, callback) {
  * 去除文本中的{key},避免翻译格式错误
  * @param {*} source
  */
-
 function replaceKeyByZero(source) {
   const nokeySource = {}
+  // transform {key}=>{0}
   Object.keys(source).forEach((key) => {
     nokeySource[key] = source[key].replace(/{key}/g, "{0}")
   })
   return nokeySource
 }
-
 /**
  * 还原文本中的{key}
- * @param {*} source
+ * @param {object} source 翻译的结果对象
+ * @param {string} dir 当前翻译文件的path
+ * @param {string} lang 目标语言
  */
 
-function replaceZeroByKey(source) {
+function replaceZeroByKey(source, dir, lang) {
   const noZeroSource = {}
+  const Collect = new handleErrorTextCollect(dir, lang)
+  // 全局计数器
+  counter++
+  logProgress(counter)
+  // transform {0}=>{key}
   Object.keys(source).forEach((key) => {
-    noZeroSource[key] = source[key].replace(/{[0]*}/g, "{key}")
+    let result = source[key]
+    // 收集翻译出错的文本
+    if (result.code) {
+      noZeroSource[key] = "Translate Error"
+      Collect.append({
+        [key]: result.text,
+      })
+    } else {
+      try {
+        noZeroSource[key] = result.replace(/{[0]*}/g, "{key}")
+      } catch {
+        // 处理翻译结果为非字符串情况
+        noZeroSource[key] = result.toString()
+      }
+    }
   })
+
+  appendTranslateErrorMap(Collect.getCollect())
+
   return noZeroSource
+}
+
+/**
+ * 收集翻译错误日志
+ * @param {string} path
+ * @param {string} lang
+ */
+function handleErrorTextCollect(path, lang) {
+  this.path = path
+  this.lang = lang
+  this.error = []
+}
+handleErrorTextCollect.prototype.append = function (obj) {
+  this.error.push(obj)
+}
+handleErrorTextCollect.prototype.getCollect = function () {
+  return {
+    path: this.path.replace(baseDir, pathMap[this.lang]),
+    lang: this.lang,
+    error: this.error,
+  }
+}
+
+function appendTranslateErrorMap(errorMsg) {
+  if (errorMsg.error.length) translateErrorMap.push(errorMsg)
+  if (counter === sourceMap.length * Object.keys(pathMap).length) {
+    logErrorInfo()
+  }
+}
+
+/**
+ * 错误日志打印
+ */
+function logErrorInfo() {
+  if (translateErrorMap.length) {
+    console.log(
+      `翻译结束,存在部分文本翻译失败，错误收集如下，详情可查看当前目录下的 tranlate-error.json 文件`
+    )
+    console.table(translateErrorMap)
+    fs.writeFileSync(
+      path.resolve(__dirname, "tranlate-error.json"),
+      JSON.stringify({ translateErrorMap }, null, 2)
+    )
+  } else console.log(`翻译结束,未发现文本翻译错误`)
+}
+
+/**
+ * 翻译进度打印
+ * @param {string} start
+ */
+function logProgress(start) {
+  const total = sourceMap.length * Object.keys(pathMap).length
+  const progress = Math.floor((start / total) * 100) / 100
+  console.log(`当前进度${progress * 100}%`)
 }
